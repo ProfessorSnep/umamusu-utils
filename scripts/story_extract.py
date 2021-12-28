@@ -124,7 +124,9 @@ def format_story(story: StoryData):
 
             segment_data = '\n'.join(lines_data)
             if story.kind == 'single':
-                segments_data.append(f'Title: "{get_single_story_segment_titles()[segment.id]}"')
+                titles = get_single_story_segment_titles()
+                title = titles[segment.id] if segment.id in titles else 'unknown'
+                segments_data.append(f'Title: "{title}" ({segment.id})')
             segments_data.append(f'Segment {segment.order} ({str(segment.kind)}):\n{segment_data}')
 
         episode_data = '\n'.join(segments_data)
@@ -226,17 +228,22 @@ def get_single_story_segment_titles():
 def fetch_single_mode_story_data():
     with get_master_conn() as master_conn:
         single_mode_episodes = defaultdict(lambda: defaultdict(list))
-        for story_id, card_id, card_chara_id, support_card_id, show_progress_1, gallery_list_id\
-                in master_conn.execute(f'SELECT "story_id", "card_id", "card_chara_id", "support_card_id", "show_progress_1", "gallery_list_id" FROM "{SINGLE_MODE_STORY_TABLE}"'):
+        for story_id, card_id, card_chara_id, support_card_id, support_chara_id, show_progress_1, gallery_list_id\
+                in master_conn.execute(f'SELECT "story_id", "card_id", "card_chara_id", "support_card_id", "support_chara_id", "show_progress_1", "gallery_list_id" FROM "{SINGLE_MODE_STORY_TABLE}"'):
             segments = [SegmentData(story_id, 1, SegmentKind.TEXT)]
+            chara_id = card_chara_id
+
             # support cards do not have a card_chara_id set, so set that manually
             if support_card_id > 0:
                 support_map = get_support_to_char_map()
                 if support_card_id in support_map:
-                    card_chara_id = support_map[support_card_id]
+                    chara_id = support_map[support_card_id]
+            
+            if support_chara_id > 0:
+                chara_id = support_chara_id
 
             # ignore anything that isnt associated to a character
-            if card_chara_id > 0:
+            if chara_id > 0:
                 # set file name and episode index depending on story type
                 if card_id > 0:
                     desc = f'card_{card_id}'
@@ -244,10 +251,13 @@ def fetch_single_mode_story_data():
                 elif support_card_id > 0:
                     desc = f'support_{support_card_id}'
                     indx = show_progress_1
+                elif support_chara_id > 0:
+                    desc = f'support_basic'
+                    indx = 1
                 else:
                     desc = 'basic'
                     indx = gallery_list_id
-                single_mode_episodes[card_chara_id][desc].append(EpisodeData(indx, segments))
+                single_mode_episodes[chara_id][desc].append(EpisodeData(indx, segments))
 
         def iter_episodes():
             for chara_id, items in single_mode_episodes.items():
