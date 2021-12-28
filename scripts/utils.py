@@ -24,6 +24,21 @@ def get_girls_dict():
     return _girls
 
 
+_support_map = None
+def get_support_to_char_map():
+    global _support_map
+    if _support_map:
+        return _support_map
+    
+    support_map = {}
+    with get_master_conn() as master_conn:
+        for support_id, chara_id in master_conn.execute('SELECT "id", "chara_id" FROM "support_card_data"'):
+            support_map[support_id] = chara_id
+    
+    _support_map = support_map
+    return _support_map
+
+
 def get_logger(name: str):
     logger = logging.getLogger(name)
     if name == '__main__':

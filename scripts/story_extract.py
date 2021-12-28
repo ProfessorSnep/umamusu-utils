@@ -9,7 +9,7 @@ from typing import List
 from UnityPy.enums import ClassIDType
 from collections import defaultdict
 
-from utils import get_master_conn, get_storage_folder, get_logger, get_girls_dict
+from utils import get_master_conn, get_storage_folder, get_logger, get_girls_dict, get_support_to_char_map
 
 logger = get_logger(__name__)
 
@@ -21,6 +21,7 @@ STORY_ROOT = get_storage_folder('story')
 MAIN_STORY_TABLE = 'main_story_data'
 EVENT_STORY_TABLE = 'story_event_story_data'
 CHARACTER_STORY_TABLE = 'chara_story_data'
+SINGLE_MODE_STORY_TABLE = 'single_mode_story_data'
 MAIN_STORY_SEG_MAX = 5
 MAIN_STORY_SEG_COLUMNS = ', '.join([
     column
@@ -78,6 +79,7 @@ def story_extract():
     save_stories(fetch_main_story_data())
     save_stories(fetch_event_story_data())
     save_stories(fetch_character_story_data())
+    save_stories(fetch_single_mode_story_data())
 
 
 def save_stories(stories: List[StoryData]):
@@ -89,6 +91,9 @@ def save_story(story: StoryData):
     name = story.id
     if story.kind == 'chara':
         name = get_girls_dict()[story.id]
+    if story.kind == 'single':
+        split = name.split('/', 1)
+        name = f'{get_girls_dict()[int(split[0])]}/{split[1]}'
 
     path = Path(STORY_ROOT, story.kind, f'{name}.txt')
     if SKIP_EXISTING and path.exists():
@@ -118,6 +123,8 @@ def format_story(story: StoryData):
                     lines_data.append(line_data)
 
             segment_data = '\n'.join(lines_data)
+            if story.kind == 'single':
+                segments_data.append(f'Title: "{get_single_story_segment_titles()[segment.id]}"')
             segments_data.append(f'Segment {segment.order} ({str(segment.kind)}):\n{segment_data}')
 
         episode_data = '\n'.join(segments_data)
@@ -156,7 +163,10 @@ def fetch_segment_lines(segment: SegmentData):
 
         for block in timeline.type_tree['BlockList']:
             for clip in block['TextTrack']['ClipList']:
+                # swap below if getting an error due to installed UnityPy version
                 obj = objects[clip['m_PathID']]
+                # obj = objects[clip.read().path_id]
+
                 type_tree = obj.read().type_tree
                 lines.append(LineData(type_tree['Name'], type_tree['Text']))
 
@@ -198,6 +208,55 @@ def fetch_character_story_data():
 
         character_story_data = [StoryData(chara_id, 'chara', episodes) for chara_id, episodes in chara_episodes.items()]
         return character_story_data
+
+
+_single_story_segment_titles = None
+def get_single_story_segment_titles():
+    global _single_story_segment_titles
+    if _single_story_segment_titles:
+        return _single_story_segment_titles
+    single_story_segment_titles = {}
+    with get_master_conn() as master_conn:
+        for index, text in master_conn.execute(f'SELECT "index", "text" FROM "text_data" WHERE "category" = 181'):
+            single_story_segment_titles[index] = text
+    _single_story_segment_titles = single_story_segment_titles
+    return _single_story_segment_titles
+
+
+def fetch_single_mode_story_data():
+    with get_master_conn() as master_conn:
+        single_mode_episodes = defaultdict(lambda: defaultdict(list))
+        for story_id, card_id, card_chara_id, support_card_id, show_progress_1, gallery_list_id\
+                in master_conn.execute(f'SELECT "story_id", "card_id", "card_chara_id", "support_card_id", "show_progress_1", "gallery_list_id" FROM "{SINGLE_MODE_STORY_TABLE}"'):
+            segments = [SegmentData(story_id, 1, SegmentKind.TEXT)]
+            # support cards do not have a card_chara_id set, so set that manually
+            if support_card_id > 0:
+                support_map = get_support_to_char_map()
+                if support_card_id in support_map:
+                    card_chara_id = support_map[support_card_id]
+
+            # ignore anything that isnt associated to a character
+            if card_chara_id > 0:
+                # set file name and episode index depending on story type
+                if card_id > 0:
+                    desc = f'card_{card_id}'
+                    indx = gallery_list_id
+                elif support_card_id > 0:
+                    desc = f'support_{support_card_id}'
+                    indx = show_progress_1
+                else:
+                    desc = 'basic'
+                    indx = gallery_list_id
+                single_mode_episodes[card_chara_id][desc].append(EpisodeData(indx, segments))
+
+        def iter_episodes():
+            for chara_id, items in single_mode_episodes.items():
+                for card_id, episodes in items.items():
+                    yield (chara_id, card_id, episodes)
+
+        single_mode_story_data = [StoryData(
+            f'{chara_id}/{card_id}', 'single', episodes) for (chara_id, card_id, episodes) in iter_episodes()]
+        return single_mode_story_data
 
 
 if __name__ == '__main__':
